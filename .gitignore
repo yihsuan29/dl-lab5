@@ -1,5 +1,8 @@
 DLP_Lab_5_Slides.pdf
 Spring2025_DLP_Lab5.pdf
+wandb/
+results/
+eval_videos/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -78,7 +78,7 @@ def evaluate(args):
 
     preprocessor = AtariPreprocessor()
     input_dim = env.observation_space.shape[0]
-    hidden_dim = 64
+    hidden_dim = 128
     num_actions = env.action_space.n
 
     model = DQN(input_dim=input_dim, hidden_dim=hidden_dim, num_actions=num_actions).to(device)

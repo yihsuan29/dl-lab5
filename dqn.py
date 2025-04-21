@@ -16,6 +16,15 @@ from collections import deque
 import wandb
 import argparse
 import time
+import optuna
+
+# Set seed
+seed = 42 
+np.random.seed(seed)
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed) 
+
 
 gym.register_envs(ale_py)
 
@@ -117,7 +126,7 @@ class DQNAgent:
         self.env = gym.make(env_name, render_mode="rgb_array")
         self.test_env = gym.make(env_name, render_mode="rgb_array")
         self.input_dim = self.env.observation_space.shape[0]
-        self.hidden_dim = 64
+        self.hidden_dim = 128
         self.num_actions = self.env.action_space.n
         self.preprocessor = AtariPreprocessor()
 
@@ -158,7 +167,7 @@ class DQNAgent:
             q_values = self.q_net(state_tensor)
         return q_values.argmax().item()
 
-    def run(self, episodes=200):
+    def run(self, episodes= 1000):
         for ep in range(episodes):
             obs, _ = self.env.reset()
             if self.task==1:
@@ -310,7 +319,42 @@ class DQNAgent:
         if self.train_count % 1000 == 0:
            print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
 
+# def objective(trial):
+#     lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
+#     args.lr = lr
+#     args.save_dir = f"{args.save_dir}_{lr}"
+#     wandb.init(project="DLP-Lab5-DQN-CartPole", name=f"{args.wandb_run_name}_{lr}", save_code=True)
+#     agent = DQNAgent(args=args)
+#     reward = agent.run()
+#     wandb.finish()
+#     return reward
 
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser()
+#     # Add other arguments as needed
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument("--save-dir", type=str, default="./results")
+#     parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")
+#     parser.add_argument("--batch-size", type=int, default=32)
+#     parser.add_argument("--memory-size", type=int, default=100000)
+#     parser.add_argument("--lr", type=float, default=0.0001)
+#     parser.add_argument("--discount-factor", type=float, default=0.99)
+#     parser.add_argument("--epsilon-start", type=float, default=1.0)
+#     parser.add_argument("--epsilon-decay", type=float, default=0.999999)
+#     parser.add_argument("--epsilon-min", type=float, default=0.05)
+#     parser.add_argument("--target-update-frequency", type=int, default=1000)
+#     parser.add_argument("--replay-start-size", type=int, default=50000)
+#     parser.add_argument("--max-episode-steps", type=int, default=10000)
+#     parser.add_argument("--train-per-step", type=int, default=1)
+#     parser.add_argument("--task", type=int, default=1)
+#     parser.add_argument("--num_epochs", type=int, default=1000)
+#     args = parser.parse_args()
+#     # Parse arguments and initialize WandB
+#     #wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
+
+#     # Run Optuna study
+#     study = optuna.create_study(direction='maximize')
+#     study.optimize(objective, n_trials=20) 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-dir", type=str, default="./results")
@@ -327,9 +371,10 @@ if __name__ == "__main__":
     parser.add_argument("--max-episode-steps", type=int, default=10000)
     parser.add_argument("--train-per-step", type=int, default=1)
     parser.add_argument("--task", type=int, default=1)
+    parser.add_argument("--num-epochs", type=int, default=1000)
     args = parser.parse_args()
 
     wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
     agent = DQNAgent(args=args)
-    agent.run()
+    agent.run(args.num_epochs)
     
