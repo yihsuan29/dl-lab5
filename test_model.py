@@ -12,23 +12,32 @@ from collections import deque
 import argparse
 
 class DQN(nn.Module):
-    def __init__(self, input_channels, num_actions):
+    def __init__(self, input_dim, hidden_dim, num_actions):
         super(DQN, self).__init__()
+        # self.network = nn.Sequential(
+        #     nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
+        #     nn.ReLU(),
+        #     nn.Conv2d(32, 64, kernel_size=4, stride=2),
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        #     nn.ReLU(),
+        #     nn.Flatten(),
+        #     nn.Linear(64 * 7 * 7, 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, num_actions)
+        # )
         self.network = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 512),
-            nn.ReLU(),
-            nn.Linear(512, num_actions)
-        )
+           nn.Linear(input_dim, hidden_dim),
+           nn.ReLU(),
+           nn.Linear(hidden_dim, hidden_dim),
+           nn.ReLU(),
+           nn.Linear(hidden_dim, num_actions)
+        ) 
 
     def forward(self, x):
-        return self.network(x / 255.0)
+        #return self.network(x / 255.0)
+        return self.network(x)
+    
 class AtariPreprocessor:
     def __init__(self, frame_stack=4):
         self.frame_stack = frame_stack
@@ -60,14 +69,19 @@ def evaluate(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    env = gym.make("ALE/Pong-v5", render_mode="rgb_array")
+    if args.task==1:
+        env = gym.make("CartPole-v1", render_mode="rgb_array")
+    else:
+        env = gym.make("ALE/Pong-v5", render_mode="rgb_array")
     env.action_space.seed(args.seed)
     env.observation_space.seed(args.seed)
 
     preprocessor = AtariPreprocessor()
+    input_dim = env.observation_space.shape[0]
+    hidden_dim = 64
     num_actions = env.action_space.n
 
-    model = DQN(4, num_actions).to(device)
+    model = DQN(input_dim=input_dim, hidden_dim=hidden_dim, num_actions=num_actions).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.eval()
 
@@ -75,7 +89,10 @@ def evaluate(args):
 
     for ep in range(args.episodes):
         obs, _ = env.reset(seed=args.seed + ep)
-        state = preprocessor.reset(obs)
+        if args.task==1:
+            state = obs
+        else:
+            state = preprocessor.reset(obs)
         done = False
         total_reward = 0
         frames = []
@@ -92,7 +109,10 @@ def evaluate(args):
             next_obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             total_reward += reward
-            state = preprocessor.step(next_obs)
+            if args.task==1:
+                state = next_obs
+            else:
+                state = preprocessor.step(next_obs)
             frame_idx += 1
 
         out_path = os.path.join(args.output_dir, f"eval_ep{ep}.mp4")
@@ -107,5 +127,6 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="./eval_videos")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=313551076, help="Random seed for evaluation")
+    parser.add_argument("--task", type=int, default=1)
     args = parser.parse_args()
     evaluate(args)
