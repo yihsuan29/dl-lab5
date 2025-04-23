@@ -78,7 +78,7 @@ def evaluate(args):
 
     preprocessor = AtariPreprocessor()
     input_dim = env.observation_space.shape[0]
-    hidden_dim = 128
+    hidden_dim = 32
     num_actions = env.action_space.n
 
     model = DQN(input_dim=input_dim, hidden_dim=hidden_dim, num_actions=num_actions).to(device)
@@ -86,7 +86,7 @@ def evaluate(args):
     model.eval()
 
     os.makedirs(args.output_dir, exist_ok=True)
-
+    average_score = 0
     for ep in range(args.episodes):
         obs, _ = env.reset(seed=args.seed + ep)
         if args.task==1:
@@ -120,6 +120,8 @@ def evaluate(args):
             for f in frames:
                 video.append_data(f)
         print(f"Saved episode {ep} with total reward {total_reward} → {out_path}")
+        average_score+=total_reward
+    print(f"Final Average score:{average_score/args.episodes}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

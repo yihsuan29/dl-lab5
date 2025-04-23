@@ -17,6 +17,7 @@ import wandb
 import argparse
 import time
 import optuna
+from torch.optim.lr_scheduler import StepLR
 
 # Set seed
 seed = 42 
@@ -42,7 +43,7 @@ class DQN(nn.Module):
         - Feel free to change the architecture (e.g. number of hidden layers and the width of each hidden layer) as you like
         - Feel free to add any member variables/functions whenever needed
     """
-    def __init__(self,input_dim, hidden_dim, num_actions):
+    def __init__(self, num_actions):
         super(DQN, self).__init__()
         # An example: 
         #self.network = nn.Sequential(
@@ -53,18 +54,26 @@ class DQN(nn.Module):
         #    nn.Linear(64, num_actions)
         #)       
         ########## YOUR CODE HERE (5~10 lines) ##########
-        self.network = nn.Sequential(
-           nn.Linear(input_dim, hidden_dim),
-           nn.ReLU(),
-           nn.Linear(hidden_dim, hidden_dim),
-           nn.ReLU(),
-           nn.Linear(hidden_dim, num_actions)
-        ) 
+        self.cnn = nn.Sequential(nn.Conv2d(4, 32, kernel_size=8, stride=4),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(64, 64, kernel_size=3, stride=1),
+                                    nn.ReLU(True)
+                                    )
+        self.classifier = nn.Sequential(nn.Linear(7*7*64, 512),
+                                        nn.ReLU(True),
+                                        nn.Linear(512, num_actions)
+                                        )
         
         ########## END OF YOUR CODE ##########
 
     def forward(self, x):
-        return self.network(x)
+        x = x.float() / 255.
+        x = self.cnn(x)
+        x = torch.flatten(x, start_dim=1)
+        x = self.classifier(x)
+        return x
 
 
 class AtariPreprocessor:
@@ -119,25 +128,23 @@ class PrioritizedReplayBuffer:
                     
         ########## END OF YOUR CODE (for Task 3) ########## 
         return
-        
 
-class DQNAgent:
-    def __init__(self, env_name="CartPole-v1", args=None, save_dir=None):
+class DDQNAgent:
+    def __init__(self, env_name="ALE/Pong-v5", args=None):
         self.env = gym.make(env_name, render_mode="rgb_array")
         self.test_env = gym.make(env_name, render_mode="rgb_array")
-        self.input_dim = self.env.observation_space.shape[0]
-        self.hidden_dim = 32
         self.num_actions = self.env.action_space.n
         self.preprocessor = AtariPreprocessor()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
-        self.q_net = DQN(input_dim=self.input_dim, hidden_dim= self.hidden_dim, num_actions=self.num_actions).to(self.device)
+        self.q_net = DQN(num_actions=self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
-        self.target_net = DQN(input_dim=self.input_dim, hidden_dim= self.hidden_dim, num_actions=self.num_actions).to(self.device)
+        self.target_net = DQN(num_actions=self.num_actions).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
+        #self.scheduler = StepLR(self.optimizer, step_size=args.num_epochs // 2, gamma=0.5)
 
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
@@ -147,17 +154,18 @@ class DQNAgent:
 
         self.env_count = 0
         self.train_count = 0
-        self.best_reward = 0  # Initilized to 0 for CartPole and to -21 for Pong
+        self.best_reward = -21  # Initilized to 0 for CartPole and to -21 for Pong
         self.max_episode_steps = args.max_episode_steps
         self.replay_start_size = args.replay_start_size
         self.target_update_frequency = args.target_update_frequency
         self.train_per_step = args.train_per_step
-        self.save_dir = save_dir
+        self.save_dir = args.save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         
         self.task = args.task
-        if self.task == 1:
+        if self.task == 1 or self.task == 2:
             self.memory = deque(maxlen=args.memory_size)
+        
 
     def select_action(self, state):
         if random.random() < self.epsilon:
@@ -167,8 +175,9 @@ class DQNAgent:
             q_values = self.q_net(state_tensor)
         return q_values.argmax().item()
 
-    def run(self, episodes= 5000):
+    def run(self, episodes= 1000):
         for ep in range(episodes):
+            #self.scheduler.step()
             obs, _ = self.env.reset()
             if self.task==1:
                 state = obs
@@ -229,7 +238,7 @@ class DQNAgent:
 
             if ep % 20 == 0:
                 eval_reward = self.evaluate()
-                if eval_reward > self.best_reward:
+                if eval_reward >= self.best_reward:
                     self.best_reward = eval_reward
                     model_path = os.path.join(self.save_dir, "best_model.pt")
                     torch.save(self.q_net.state_dict(), model_path)
@@ -277,7 +286,7 @@ class DQNAgent:
        
         ########## YOUR CODE HERE (<5 lines) ##########
         # Sample a mini-batch of (s,a,r,s',done) from the replay buffer 
-        if self.task==1:       
+        if self.task==1 or self.task==2:       
             batch = random.sample(self.memory, self.batch_size)
             states, actions, rewards, next_states, dones = zip(*batch)      
             
@@ -319,63 +328,27 @@ class DQNAgent:
         if self.train_count % 1000 == 0:
            print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
 
-# def objective(trial):
-#     lr = trial.suggest_loguniform('lr', 1e-5, 1e-3)
-#     args.lr = lr
-#     save_dir = f"{args.save_dir}_lr_{lr}"
-#     wandb.init(project=f"{args.wandb_project_name}", name=f"{args.wandb_run_name}_{lr}", save_code=True)
-#     agent = DQNAgent(args=args, save_dir=save_dir)
-#     reward = agent.run()
-#     wandb.finish()
-#     return reward
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser()
-#     # Add other arguments as needed
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument("--save-dir", type=str, default="./results")
-#     parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")    
-#     parser.add_argument("--wandb-project-name", type=str, default="DLP-Lab5-DQN-CartPole")    
-#     parser.add_argument("--batch-size", type=int, default=32)
-#     parser.add_argument("--memory-size", type=int, default=100000)
-#     parser.add_argument("--lr", type=float, default=0.0001)
-#     parser.add_argument("--discount-factor", type=float, default=0.99)
-#     parser.add_argument("--epsilon-start", type=float, default=1.0)
-#     parser.add_argument("--epsilon-decay", type=float, default=0.999999)
-#     parser.add_argument("--epsilon-min", type=float, default=0.05)
-#     parser.add_argument("--target-update-frequency", type=int, default=1000)
-#     parser.add_argument("--replay-start-size", type=int, default=50000)
-#     parser.add_argument("--max-episode-steps", type=int, default=10000)
-#     parser.add_argument("--train-per-step", type=int, default=1)
-#     parser.add_argument("--task", type=int, default=1)
-#     parser.add_argument("--num_epochs", type=int, default=1000)
-#     args = parser.parse_args()
-#     # Parse arguments and initialize WandB
-#     #wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
-
-#     # Run Optuna study
-#     study = optuna.create_study(direction='maximize')
-#     study.optimize(objective, n_trials=20) 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-dir", type=str, default="./results")
-    parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--memory-size", type=int, default=100000)
-    parser.add_argument("--lr", type=float, default=0.00019748375886895642)
+    parser.add_argument("--wandb-run-name", type=str, default="pong-run")
+    parser.add_argument("--wandb-project-name", type=str, default="DLP-Lab5-DQN-Pong") 
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--memory-size", type=int, default=1000000)
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
     parser.add_argument("--epsilon-decay", type=float, default=0.999999)
     parser.add_argument("--epsilon-min", type=float, default=0.05)
     parser.add_argument("--target-update-frequency", type=int, default=1000)
-    parser.add_argument("--replay-start-size", type=int, default=500)
+    parser.add_argument("--replay-start-size", type=int, default=50000)
     parser.add_argument("--max-episode-steps", type=int, default=10000)
-    parser.add_argument("--train-per-step", type=int, default=1)
-    parser.add_argument("--task", type=int, default=1)
+    parser.add_argument("--train-per-step", type=int, default=4)
+    parser.add_argument("--task", type=int, default=2)
     parser.add_argument("--num-epochs", type=int, default=1000)
     args = parser.parse_args()
 
-    wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
-    agent = DQNAgent(args=args)
+    wandb.init(project="Task2-lr0.0001", name=args.wandb_run_name, save_code=True)
+    agent = DDQNAgent(args=args)
     agent.run(args.num_epochs)
     
