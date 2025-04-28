@@ -17,14 +17,14 @@ import wandb
 import argparse
 import time
 import optuna
-from torch.optim.lr_scheduler import StepLR
 
 # Set seed
-seed = 42
+seed = 42 
 np.random.seed(seed)
 random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed) 
+
 
 gym.register_envs(ale_py)
 
@@ -42,7 +42,7 @@ class DQN(nn.Module):
         - Feel free to change the architecture (e.g. number of hidden layers and the width of each hidden layer) as you like
         - Feel free to add any member variables/functions whenever needed
     """
-    def __init__(self, num_actions):
+    def __init__(self,input_dim, hidden_dim, num_actions):
         super(DQN, self).__init__()
         # An example: 
         #self.network = nn.Sequential(
@@ -53,26 +53,18 @@ class DQN(nn.Module):
         #    nn.Linear(64, num_actions)
         #)       
         ########## YOUR CODE HERE (5~10 lines) ##########
-        self.cnn = nn.Sequential(nn.Conv2d(4, 32, kernel_size=8, stride=4),
-                                    nn.ReLU(True),
-                                    nn.Conv2d(32, 64, kernel_size=4, stride=2),
-                                    nn.ReLU(True),
-                                    nn.Conv2d(64, 64, kernel_size=3, stride=1),
-                                    nn.ReLU(True)
-                                    )
-        self.classifier = nn.Sequential(nn.Linear(7*7*64, 512),
-                                        nn.ReLU(True),
-                                        nn.Linear(512, num_actions)
-                                        )
+        self.network = nn.Sequential(
+           nn.Linear(input_dim, hidden_dim),
+           nn.ReLU(),
+           nn.Linear(hidden_dim, hidden_dim),
+           nn.ReLU(),
+           nn.Linear(hidden_dim, num_actions)
+        ) 
         
         ########## END OF YOUR CODE ##########
 
     def forward(self, x):
-        x = x.float() / 255.
-        x = self.cnn(x)
-        x = torch.flatten(x, start_dim=1)
-        x = self.classifier(x)
-        return x
+        return self.network(x)
 
 
 class AtariPreprocessor:
@@ -145,46 +137,45 @@ class PrioritizedReplayBuffer:
             self.priorities[idx] = (abs(err) + 1e-6) ** self.alpha   
         ########## END OF YOUR CODE (for Task 3) ########## 
         return 
-    
+        
+
 class DQNAgent:
-    def __init__(self, env_name="ALE/Pong-v5", args=None):
+    def __init__(self, env_name="CartPole-v1", args=None, save_dir=None):
         self.env = gym.make(env_name, render_mode="rgb_array")
         self.test_env = gym.make(env_name, render_mode="rgb_array")
+        self.input_dim = self.env.observation_space.shape[0]
+        self.hidden_dim = 32
         self.num_actions = self.env.action_space.n
         self.preprocessor = AtariPreprocessor()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", self.device)
 
-        self.q_net = DQN(num_actions=self.num_actions).to(self.device)
+        self.q_net = DQN(input_dim=self.input_dim, hidden_dim= self.hidden_dim, num_actions=self.num_actions).to(self.device)
         self.q_net.apply(init_weights)
-        self.target_net = DQN(num_actions=self.num_actions).to(self.device)
+        self.target_net = DQN(input_dim=self.input_dim, hidden_dim= self.hidden_dim, num_actions=self.num_actions).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
-        #self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
-        self.optimizer = optim.RMSprop(self.q_net.parameters(), lr=args.lr, alpha=0.95, eps=1e-2)
-        
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
+
         self.batch_size = args.batch_size
         self.gamma = args.discount_factor
         self.epsilon = args.epsilon_start
         self.epsilon_decay = args.epsilon_decay
         self.epsilon_min = args.epsilon_min
-        self.epsilon_decay_steps = args.epsilon_decay_steps
 
         self.env_count = 0
         self.train_count = 0
-        self.best_reward = -21  # Initilized to 0 for CartPole and to -21 for Pong
+        self.best_reward = 0  # Initilized to 0 for CartPole and to -21 for Pong
         self.max_episode_steps = args.max_episode_steps
         self.replay_start_size = args.replay_start_size
         self.target_update_frequency = args.target_update_frequency
         self.train_per_step = args.train_per_step
-        self.save_dir = args.save_dir
+        self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
-
+        
+        self.task = args.task
         self.memory = PrioritizedReplayBuffer(capacity=args.memory_size)
 
-        self.n_steps = args.n_steps
-        self.nstep_buffer = deque(maxlen=self.n_steps) 
-        
     def select_action(self, state):
         if random.random() < self.epsilon:
             return random.randint(0, self.num_actions - 1)
@@ -193,43 +184,27 @@ class DQNAgent:
             q_values = self.q_net(state_tensor)
         return q_values.argmax().item()
 
-    def run(self, episodes= 1000):
+    def run(self, episodes= 5000):
         for ep in range(episodes):
             obs, _ = self.env.reset()
-            state = self.preprocessor.reset(obs)
+            if self.task==1:
+                state = obs
+            else:
+                state = self.preprocessor.reset(obs)
             done = False
             total_reward = 0
             step_count = 0
-            
-            if step_count == 0:
-                self.nstep_buffer.clear()
 
             while not done and step_count < self.max_episode_steps:
                 action = self.select_action(state)
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
-                next_state = self.preprocessor.step(next_obs)
-                reward = np.clip(reward, -1, 1) # stable                
-
-                self.nstep_buffer.append( (state, action, reward, next_state, done))
+                next_state = next_obs
                 
-                if len(self.nstep_buffer) == self.n_steps:
-                    R = 0.0
-                    s_n = next_state
-                    done_n = done
-                    for k, (_, _, r, s_next, d) in enumerate(reversed(self.nstep_buffer)):
-                        R = r + (self.gamma * R * (1 - d))
-                        if d: 
-                            s_n = s_next
-                            done_n = True
-                            break
-                    s_0, a_0, _, _, _ = self.nstep_buffer[0]
-                    
-                    if len(self.memory.buffer):
-                        priority = self.memory.priorities[: len(self.memory.buffer)].max()
-                        self.memory.add((s_0, a_0, R, s_n, done_n), error=priority)
-                    else:
-                        self.memory.add((s_0, a_0, R, s_n, done_n), error = 1)
+                priority = 1    
+                if len(self.memory.buffer):
+                    priority = self.memory.priorities[: len(self.memory.buffer)].max()
+                self.memory.add((state, action, reward, next_state, done), error = priority)
 
                 for _ in range(self.train_per_step):
                     self.train()
@@ -238,11 +213,6 @@ class DQNAgent:
                 total_reward += reward
                 self.env_count += 1
                 step_count += 1
-                
-                if self.env_count % 200000 ==0:
-                    model_path = os.path.join(self.save_dir, f"env_count_model{self.env_count}.pt")
-                    torch.save(self.q_net.state_dict(), model_path)
-                    print(f"Saved env_count {self.env_count} model to {model_path}")
 
                 if self.env_count % 1000 == 0:                 
                     print(f"[Collect] Ep: {ep} Step: {step_count} SC: {self.env_count} UC: {self.train_count} Eps: {self.epsilon:.4f}")
@@ -277,7 +247,7 @@ class DQNAgent:
 
             if ep % 20 == 0:
                 eval_reward = self.evaluate()
-                if eval_reward >= self.best_reward:
+                if eval_reward > self.best_reward:
                     self.best_reward = eval_reward
                     model_path = os.path.join(self.save_dir, "best_model.pt")
                     torch.save(self.q_net.state_dict(), model_path)
@@ -288,14 +258,13 @@ class DQNAgent:
                     "Update Count": self.train_count,
                     "Eval Reward": eval_reward
                 })
-                
-            if self.train_count >=1e6:
-                break
-                
 
     def evaluate(self):
         obs, _ = self.test_env.reset()
-        state = self.preprocessor.reset(obs)
+        if self.task==1:
+                state = obs
+        else:
+            state = self.preprocessor.reset(obs)
         done = False
         total_reward = 0
 
@@ -306,7 +275,10 @@ class DQNAgent:
             next_obs, reward, terminated, truncated, _ = self.test_env.step(action)
             done = terminated or truncated
             total_reward += reward
-            state = self.preprocessor.step(next_obs)
+            if self.task==1:
+                state = next_obs
+            else:
+                state = self.preprocessor.step(next_obs)
 
         return total_reward
 
@@ -315,17 +287,17 @@ class DQNAgent:
         if len(self.memory.buffer) < self.replay_start_size:
             return 
         
-        #Decay function for epsilin-greedy exploration
+        # Decay function for epsilin-greedy exploration
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
-        
         self.train_count += 1
 
        
         ########## YOUR CODE HERE (<5 lines) ##########
         # Sample a mini-batch of (s,a,r,s',done) from the replay buffer 
         indices, batch, weights = self.memory.sample(self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)   
+        states, actions, rewards, next_states, dones = zip(*batch)        
+            
         ########## END OF YOUR CODE ##########
 
         # Convert the states, actions, rewards, next_states, and dones into torch tensors
@@ -340,16 +312,13 @@ class DQNAgent:
         ########## YOUR CODE HERE (~10 lines) ##########
         # Implement the loss function of DQN and the gradient updates 
         with torch.no_grad():
-            next_actions = torch.argmax(self.q_net(next_states), dim = 1) 
-            q_nexts = self.target_net(next_states.squeeze(-1)).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            q_targets = rewards+ (self.gamma ** self.n_steps) * q_nexts*(1-dones)
-        
-        
-        BM_errors = (q_values - q_targets.squeeze()).detach().cpu().numpy()
-        self.memory.update_priorities(indices, BM_errors)
-                
- 
-        loss = (weights * BM_errors.pow(2)).mean()
+            q_nexts = self.target_net(next_states).max(1)[0]
+            q_targets = rewards + self.gamma* q_nexts*(1-dones)
+            
+        td_errors = (q_values - q_targets.squeeze()).detach().cpu().numpy()
+        self.memory.update_priorities(indices, td_errors)
+        criterion = nn.MSELoss()
+        loss = criterion(q_values, q_targets)
         
         self.optimizer.zero_grad()
         loss.backward()
@@ -370,29 +339,64 @@ class DQNAgent:
         if self.train_count % 1000 == 0:
            print(f"[Train #{self.train_count}] Loss: {loss.item():.4f} Q mean: {q_values.mean().item():.3f} std: {q_values.std().item():.3f}")
 
+def objective(trial):
+    lr = trial.suggest_loguniform('lr', 0.0001,0.0003)
+    args.lr = lr
+    save_dir = f"{args.save_dir}_lr_{lr}"
+    wandb.init(project=f"{args.wandb_project_name}", name=f"{args.wandb_run_name}_{lr}", save_code=True)
+    agent = DQNAgent(args=args, save_dir=save_dir)
+    reward = agent.run()
+    wandb.finish()
+    return reward
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    # Add other arguments as needed
+    parser = argparse.ArgumentParser()
     parser.add_argument("--save-dir", type=str, default="./results")
-    parser.add_argument("--wandb-run-name", type=str, default="pong-run")
-    parser.add_argument("--wandb-project-name", type=str, default="DLP-Lab5-DQN-Pong") 
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--memory-size", type=int, default=1000000)
-    parser.add_argument("--lr", type=float, default=0.00025)
+    parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")    
+    parser.add_argument("--wandb-project-name", type=str, default="Ablation")   
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--memory-size", type=int, default=100000)
+    parser.add_argument("--lr", type=float, default=0.00019748375886895642)
     parser.add_argument("--discount-factor", type=float, default=0.99)
     parser.add_argument("--epsilon-start", type=float, default=1.0)
-    parser.add_argument("--epsilon-decay", type=float, default=0.99999)
-    parser.add_argument("--epsilon-min", type=float, default=0.02)
-    parser.add_argument("--epsilon-decay-steps", type=int, default=250000)
-    parser.add_argument("--target-update-frequency", type=int, default=5000)
-    parser.add_argument("--replay-start-size", type=int, default=30000)
+    parser.add_argument("--epsilon-decay", type=float, default=0.999999)
+    parser.add_argument("--epsilon-min", type=float, default=0.05)
+    parser.add_argument("--target-update-frequency", type=int, default=1000)
+    parser.add_argument("--replay-start-size", type=int, default=500)
     parser.add_argument("--max-episode-steps", type=int, default=10000)
-    parser.add_argument("--train-per-step", type=int, default=3)
+    parser.add_argument("--train-per-step", type=int, default=1)
+    parser.add_argument("--task", type=int, default=1)
     parser.add_argument("--num-epochs", type=int, default=1000)
     parser.add_argument("--n-steps", type=int, default=4)
     args = parser.parse_args()
-    
-    
-    wandb.init(project=args.wandb_project_name, name=args.wandb_run_name, save_code=True)
-    agent = DQNAgent(args=args)
-    agent.run(args.num_epochs)
+    # Parse arguments and initialize WandB
+    #wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
+
+    # Run Optuna study
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=20) 
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument("--save-dir", type=str, default="./results")
+#     parser.add_argument("--wandb-run-name", type=str, default="cartpole-run")
+#     parser.add_argument("--batch-size", type=int, default=128)
+#     parser.add_argument("--memory-size", type=int, default=100000)
+#     parser.add_argument("--lr", type=float, default=0.00019748375886895642)
+#     parser.add_argument("--discount-factor", type=float, default=0.99)
+#     parser.add_argument("--epsilon-start", type=float, default=1.0)
+#     parser.add_argument("--epsilon-decay", type=float, default=0.999999)
+#     parser.add_argument("--epsilon-min", type=float, default=0.05)
+#     parser.add_argument("--target-update-frequency", type=int, default=1000)
+#     parser.add_argument("--replay-start-size", type=int, default=500)
+#     parser.add_argument("--max-episode-steps", type=int, default=10000)
+#     parser.add_argument("--train-per-step", type=int, default=1)
+#     parser.add_argument("--task", type=int, default=1)
+#     parser.add_argument("--num-epochs", type=int, default=1000)
+#     args = parser.parse_args()
+
+#     wandb.init(project="DLP-Lab5-DQN-CartPole", name=args.wandb_run_name, save_code=True)
+#     agent = DQNAgent(args=args)
+#     agent.run(args.num_epochs)
     

@@ -12,7 +12,7 @@ from collections import deque
 import argparse
 
 class DQN(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_actions):
+    def __init__(self, num_actions): # input_dim, hidden_dim
         super(DQN, self).__init__()
         # self.network = nn.Sequential(
         #     nn.Conv2d(input_channels, 32, kernel_size=8, stride=4),
@@ -26,17 +26,37 @@ class DQN(nn.Module):
         #     nn.ReLU(),
         #     nn.Linear(512, num_actions)
         # )
-        self.network = nn.Sequential(
-           nn.Linear(input_dim, hidden_dim),
-           nn.ReLU(),
-           nn.Linear(hidden_dim, hidden_dim),
-           nn.ReLU(),
-           nn.Linear(hidden_dim, num_actions)
-        ) 
+    #     self.network = nn.Sequential(
+    #        nn.Linear(input_dim, hidden_dim),
+    #        nn.ReLU(),
+    #        nn.Linear(hidden_dim, hidden_dim),
+    #        nn.ReLU(),
+    #        nn.Linear(hidden_dim, num_actions)
+    #     ) 
+
+    # def forward(self, x):
+    #     #return self.network(x / 255.0)
+    #     return self.network(x)
+        self.cnn = nn.Sequential(nn.Conv2d(4, 32, kernel_size=8, stride=4),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(32, 64, kernel_size=4, stride=2),
+                                    nn.ReLU(True),
+                                    nn.Conv2d(64, 64, kernel_size=3, stride=1),
+                                    nn.ReLU(True)
+                                    )
+        self.classifier = nn.Sequential(nn.Linear(7*7*64, 512),
+                                        nn.ReLU(True),
+                                        nn.Linear(512, num_actions)
+                                        )
+        
+        ########## END OF YOUR CODE ##########
 
     def forward(self, x):
-        #return self.network(x / 255.0)
-        return self.network(x)
+        x = x.float() / 255.
+        x = self.cnn(x)
+        x = torch.flatten(x, start_dim=1)
+        x = self.classifier(x)
+        return x
     
 class AtariPreprocessor:
     def __init__(self, frame_stack=4):
@@ -77,11 +97,12 @@ def evaluate(args):
     env.observation_space.seed(args.seed)
 
     preprocessor = AtariPreprocessor()
-    input_dim = env.observation_space.shape[0]
-    hidden_dim = 32
+    # input_dim = env.observation_space.shape[0]
+    # hidden_dim = 32
     num_actions = env.action_space.n
 
-    model = DQN(input_dim=input_dim, hidden_dim=hidden_dim, num_actions=num_actions).to(device)
+    #model = DQN(input_dim=input_dim, hidden_dim=hidden_dim, num_actions=num_actions).to(device)
+    model = DQN(num_actions=num_actions).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.eval()
 
@@ -121,14 +142,15 @@ def evaluate(args):
                 video.append_data(f)
         print(f"Saved episode {ep} with total reward {total_reward} → {out_path}")
         average_score+=total_reward
-    print(f"Final Average score:{average_score/args.episodes}")
+    print(f"Seed:{args.seed}, Final Average score:{average_score/args.episodes}")
+    return average_score/args.episodes
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, required=True, help="Path to trained .pt model")
     parser.add_argument("--output-dir", type=str, default="./eval_videos")
     parser.add_argument("--episodes", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=313551076, help="Random seed for evaluation")
+    parser.add_argument("--seed", type=int, default=3853802, help="Random seed for evaluation")#313551076
     parser.add_argument("--task", type=int, default=1)
     args = parser.parse_args()
-    evaluate(args)
+    result = evaluate(args)

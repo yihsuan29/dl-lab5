@@ -3,6 +3,7 @@ Spring2025_DLP_Lab5.pdf
 wandb/
 results/
 eval_videos/
+task3.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
